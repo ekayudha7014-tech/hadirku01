@@ -1,0 +1,8 @@
+{
+  "name": "Copy of HADIRKU",
+  "description": "A comprehensive online attendance system featuring role-based access for admins and employees, real-time geolocation tracking, and camera-based verification.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
