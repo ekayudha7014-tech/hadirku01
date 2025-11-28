@@ -27,7 +27,24 @@ export interface AttendanceRecord {
   checkOutPhoto?: string; // Base64
 }
 
+export interface LeaveRequest {
+  id: string;
+  userId: string;
+  userFullName: string;
+  userUnit: string;
+  date: string; // YYYY-MM-DD
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  requestDate: string; // ISO String time of request
+}
+
 export interface Coordinates {
   latitude: number;
   longitude: number;
+}
+
+export interface SystemConfig {
+  officeLocation?: Coordinates;
+  officeName?: string;
+  radiusMeters: number;
 }
