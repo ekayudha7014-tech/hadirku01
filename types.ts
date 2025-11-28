@@ -20,6 +20,7 @@ export interface AttendanceRecord {
   checkInTime: string; // ISO String
   checkInLocation: string; // Lat, Long string
   checkInPhoto: string; // Base64
+  status?: 'ON_TIME' | 'LATE'; // New field for status
   
   // Check Out
   checkOutTime?: string; // ISO String

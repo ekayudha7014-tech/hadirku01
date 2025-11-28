@@ -22,7 +22,9 @@ import {
   Lock,
   KeyRound,
   Settings,
-  LocateFixed
+  LocateFixed,
+  Maximize2,
+  RefreshCcw
 } from 'lucide-react';
 
 // --- UTILS ---
@@ -293,11 +295,18 @@ const AdminDashboard: React.FC = () => {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [config, setConfig] = useState<SystemConfig>({ radiusMeters: 500 });
+  
+  // View Photo Modal State
+  const [viewPhoto, setViewPhoto] = useState<string | null>(null);
 
   // Add User State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newUser, setNewUser] = useState({ fullName: '', username: '', password: '', unit: '' });
   const [loadingConfig, setLoadingConfig] = useState(false);
+
+  // Reset User Password State
+  const [resetPwdUser, setResetPwdUser] = useState<User | null>(null);
+  const [adminNewPass, setAdminNewPass] = useState('');
 
   useEffect(() => {
     refreshData();
@@ -324,6 +333,21 @@ const AdminDashboard: React.FC = () => {
     setNewUser({ fullName: '', username: '', password: '', unit: '' });
     setIsAddModalOpen(false);
     refreshData();
+  };
+
+  const handleAdminResetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (resetPwdUser && adminNewPass) {
+        if(adminNewPass.length < 4) {
+            alert("Password minimal 4 karakter");
+            return;
+        }
+        DB.resetUserPassword(resetPwdUser.id, adminNewPass);
+        alert(`Password untuk user ${resetPwdUser.fullName} berhasil direset.`);
+        setResetPwdUser(null);
+        setAdminNewPass('');
+        refreshData();
+    }
   };
 
   const handleLeaveAction = (id: string, status: 'APPROVED' | 'REJECTED') => {
@@ -384,7 +408,7 @@ const AdminDashboard: React.FC = () => {
     }
 
     // Header CSV
-    const headers = ["Tanggal", "Nama Lengkap", "Unit Kerja", "Jam Masuk", "Lokasi Masuk", "Jam Pulang", "Lokasi Pulang"];
+    const headers = ["Tanggal", "Nama Lengkap", "Unit Kerja", "Status Masuk", "Jam Masuk", "Lokasi Masuk", "Jam Pulang", "Lokasi Pulang"];
     
     // Data Rows
     const rows = attendance.map(record => {
@@ -398,11 +422,13 @@ const AdminDashboard: React.FC = () => {
         const safeUnit = `"${record.userUnit}"`;
         const safeLocIn = `"${record.checkInLocation}"`;
         const safeLocOut = record.checkOutLocation ? `"${record.checkOutLocation}"` : "-";
+        const status = record.status === 'LATE' ? 'Terlambat' : 'Tepat Waktu';
 
         return [
             record.date,
             safeName,
             safeUnit,
+            status,
             checkInTimeStr,
             safeLocIn,
             checkOutTimeStr,
@@ -564,6 +590,7 @@ const AdminDashboard: React.FC = () => {
                       <th className="px-6 py-3">Username</th>
                       <th className="px-6 py-3">Unit Kerja</th>
                       <th className="px-6 py-3">Role</th>
+                      <th className="px-6 py-3">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -575,6 +602,17 @@ const AdminDashboard: React.FC = () => {
                             <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">{user.unit}</span>
                         </td>
                         <td className="px-6 py-4 text-xs">{user.role}</td>
+                        <td className="px-6 py-4 text-xs">
+                            {user.role !== 'ADMIN' && (
+                                <button 
+                                    onClick={() => setResetPwdUser(user)}
+                                    className="p-1.5 bg-gray-100 text-gray-600 rounded hover:bg-orange-100 hover:text-orange-600 transition-colors"
+                                    title="Reset Password"
+                                >
+                                    <KeyRound size={16} />
+                                </button>
+                            )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -683,13 +721,27 @@ const AdminDashboard: React.FC = () => {
                                 <td className="px-6 py-4 font-medium text-gray-900">{record.userFullName}</td>
                                 <td className="px-6 py-4">{record.userUnit}</td>
                                 <td className="px-6 py-4">
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col items-start">
                                         <span className="font-semibold text-green-600">{new Date(record.checkInTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                                        <span className="text-xs text-gray-400 flex items-center gap-1 max-w-[150px] truncate" title={record.checkInLocation}><MapPin size={10}/> {record.checkInLocation}</span>
+                                        {record.status === 'LATE' && (
+                                            <span className="mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-600">
+                                                TERLAMBAT
+                                            </span>
+                                        )}
+                                        <span className="text-xs text-gray-400 flex items-center gap-1 max-w-[150px] truncate mt-1" title={record.checkInLocation}><MapPin size={10}/> {record.checkInLocation}</span>
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                    <img src={record.checkInPhoto} alt="In" className="h-12 w-12 rounded-lg object-cover border border-gray-200 shadow-sm cursor-pointer hover:scale-150 transition-transform origin-left aspect-square" />
+                                    <div className="relative group cursor-zoom-in w-12 h-12" onClick={() => setViewPhoto(record.checkInPhoto)}>
+                                        <img 
+                                            src={record.checkInPhoto} 
+                                            alt="In" 
+                                            className="h-12 w-12 rounded-lg object-cover border border-gray-200 shadow-sm group-hover:opacity-90 transition-opacity" 
+                                        />
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/20 rounded-lg transition-opacity">
+                                            <Maximize2 size={16} className="text-white drop-shadow-md" />
+                                        </div>
+                                    </div>
                                 </td>
                                 <td className="px-6 py-4">
                                     {record.checkOutTime ? (
@@ -703,7 +755,16 @@ const AdminDashboard: React.FC = () => {
                                 </td>
                                 <td className="px-6 py-4">
                                     {record.checkOutPhoto && (
-                                         <img src={record.checkOutPhoto} alt="Out" className="h-12 w-12 rounded-lg object-cover border border-gray-200 shadow-sm cursor-pointer hover:scale-150 transition-transform origin-left aspect-square" />
+                                        <div className="relative group cursor-zoom-in w-12 h-12" onClick={() => setViewPhoto(record.checkOutPhoto)}>
+                                            <img 
+                                                src={record.checkOutPhoto} 
+                                                alt="Out" 
+                                                className="h-12 w-12 rounded-lg object-cover border border-gray-200 shadow-sm group-hover:opacity-90 transition-opacity" 
+                                            />
+                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/20 rounded-lg transition-opacity">
+                                                <Maximize2 size={16} className="text-white drop-shadow-md" />
+                                            </div>
+                                        </div>
                                     )}
                                 </td>
                             </tr>
@@ -820,6 +881,70 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Admin Reset Password Modal */}
+      {resetPwdUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 animate-fade-in relative">
+                <button 
+                    onClick={() => setResetPwdUser(null)} 
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+                >
+                    <XCircle size={24} />
+                </button>
+                
+                <div className="text-center mb-6">
+                    <div className="h-12 w-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <RefreshCcw size={24} />
+                    </div>
+                    <h3 className="text-lg font-bold text-gray-900">Reset Password User</h3>
+                    <p className="text-sm text-gray-500">Ubah password untuk <span className="font-semibold text-gray-800">{resetPwdUser.fullName}</span></p>
+                </div>
+
+                <form onSubmit={handleAdminResetPassword} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Password Baru</label>
+                        <input 
+                            type="text" 
+                            required 
+                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                            placeholder="Masukkan password baru"
+                            value={adminNewPass}
+                            onChange={(e) => setAdminNewPass(e.target.value)}
+                        />
+                    </div>
+                    <button 
+                        type="submit" 
+                        className="w-full bg-orange-600 text-white py-2.5 rounded-lg hover:bg-orange-700 font-medium mt-2 transition-colors shadow-sm"
+                    >
+                        Reset Password
+                    </button>
+                </form>
+            </div>
+        </div>
+      )}
+
+      {/* View Photo Modal (Lightbox) */}
+      {viewPhoto && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black bg-opacity-95 backdrop-blur-sm transition-opacity" onClick={() => setViewPhoto(null)}>
+            <div className="relative max-w-4xl w-full max-h-screen flex flex-col items-center justify-center animate-fade-in" onClick={e => e.stopPropagation()}>
+                <button
+                    className="absolute -top-12 right-0 text-white hover:text-gray-300 p-2 transition-colors focus:outline-none"
+                    onClick={() => setViewPhoto(null)}
+                >
+                    <X size={32} />
+                </button>
+                <div className="bg-gray-800 p-1 rounded-lg shadow-2xl overflow-hidden">
+                    <img 
+                        src={viewPhoto} 
+                        alt="Bukti Kehadiran" 
+                        className="max-w-full max-h-[85vh] object-contain rounded-md" 
+                    />
+                </div>
+                <p className="text-gray-400 text-sm mt-4">Klik di luar foto untuk menutup</p>
+            </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -926,6 +1051,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
     setLoadingLoc(true);
     setLoadingText("Mendapatkan Lokasi GPS...");
     try {
+      // 0. Time Validation Logic (New)
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+
+      // Check Out Logic REMOVED based on user request (Allow checkout > 16:00)
+
       // 1. Get Coordinates
       const coords = await getGeolocation();
       
@@ -951,36 +1083,50 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
       setLoadingText("Mendapatkan Detail Alamat...");
       const placeName = await getPlaceName(coords.latitude, coords.longitude);
       
-      const now = new Date().toISOString();
-      const today = now.split('T')[0];
+      const nowISO = now.toISOString();
+      const today = nowISO.split('T')[0];
 
       if (cameraMode === 'IN') {
+        // Check Late Status Logic: Late if > 07:00
+        let attendanceStatus: 'ON_TIME' | 'LATE' = 'ON_TIME';
+        if (currentHour > 7 || (currentHour === 7 && currentMinute > 0)) {
+            attendanceStatus = 'LATE';
+        }
+
         const newRecord: AttendanceRecord = {
           id: `att-${Date.now()}`,
           userId: user.id,
           userFullName: user.fullName,
           userUnit: user.unit,
           date: today,
-          checkInTime: now,
+          checkInTime: nowISO,
           checkInLocation: placeName,
-          checkInPhoto: photoBase64
+          checkInPhoto: photoBase64,
+          status: attendanceStatus
         };
         DB.saveAttendance(newRecord);
+        
+        if (attendanceStatus === 'LATE') {
+            alert("Presensi berhasil dicatat (Status: Terlambat).");
+        } else {
+            alert("Presensi berhasil!");
+        }
+
       } else {
         if (todayRecord) {
             const updatedRecord: AttendanceRecord = {
                 ...todayRecord,
-                checkOutTime: now,
+                checkOutTime: nowISO,
                 checkOutLocation: placeName,
                 checkOutPhoto: photoBase64
             };
             DB.saveAttendance(updatedRecord);
+            alert("Presensi pulang berhasil!");
         }
       }
       
       setTodayRecord(DB.getTodayAttendance(user.id));
       setIsCameraOpen(false);
-      alert("Presensi berhasil!");
     } catch (error) {
       alert("Gagal mendapatkan lokasi. Pastikan GPS aktif dan izin diberikan.");
       console.error(error);
@@ -1045,6 +1191,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
         <div className="text-4xl font-bold text-gray-800 font-mono">
             {currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
         </div>
+        {/* Helper info jam */}
+        <div className="mt-2 text-xs text-gray-400 flex justify-center gap-4">
+            <span className="flex items-center gap-1"><Clock size={12}/> Masuk: &lt; 07:00</span>
+            <span className="flex items-center gap-1"><Clock size={12}/> Pulang: &ge; 16:00</span>
+        </div>
       </div>
 
       {/* Action Buttons */}
@@ -1066,6 +1217,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
                      <p className="text-3xl font-bold text-gray-800">
                         {new Date(todayRecord.checkInTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                      </p>
+                     
+                     {todayRecord.status === 'LATE' && (
+                        <div className="inline-block px-2 py-0.5 bg-red-100 text-red-600 text-xs font-bold rounded mb-1">
+                            TERLAMBAT
+                        </div>
+                     )}
+
                      <div className="flex items-start gap-2 text-sm text-gray-500">
                         <MapPin size={16} className="mt-0.5 flex-shrink-0" />
                         <span className="break-words line-clamp-2">{todayRecord.checkInLocation}</span>

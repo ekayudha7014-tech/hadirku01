@@ -45,6 +45,16 @@ export const changePassword = (userId: string, oldPass: string, newPass: string)
   return false;
 };
 
+export const resetUserPassword = (userId: string, newPass: string): void => {
+  const users = getUsers();
+  const index = users.findIndex(u => u.id === userId);
+  
+  if (index !== -1) {
+    users[index].password = newPass;
+    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  }
+};
+
 export const getAttendanceRecords = (): AttendanceRecord[] => {
   const stored = localStorage.getItem(ATTENDANCE_KEY);
   return stored ? JSON.parse(stored) : [];
