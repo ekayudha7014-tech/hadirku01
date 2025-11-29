@@ -96,6 +96,19 @@ export const deleteAttendanceRecord = (id: string): void => {
   localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
 };
 
+export const removeCheckOutData = (id: string): void => {
+  const records = getAttendanceRecords();
+  const index = records.findIndex(r => r.id === id);
+  
+  if (index >= 0) {
+    // Hapus data kepulangan
+    delete records[index].checkOutTime;
+    delete records[index].checkOutLocation;
+    delete records[index].checkOutPhoto;
+    localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
+  }
+};
+
 export const getTodayAttendance = (userId: string): AttendanceRecord | undefined => {
   const records = getAttendanceRecords();
   const today = new Date().toISOString().split('T')[0];

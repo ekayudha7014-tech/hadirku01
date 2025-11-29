@@ -29,7 +29,8 @@ import {
   Trash2,
   ShieldAlert,
   Upload,
-  FileDown
+  FileDown,
+  RotateCcw
 } from 'lucide-react';
 
 // --- UTILS ---
@@ -507,9 +508,16 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleDeleteAttendance = (id: string, name: string, date: string) => {
-    if(window.confirm(`Apakah Anda yakin ingin menghapus data presensi ${name} pada tanggal ${date}? Data yang dihapus tidak dapat dikembalikan.`)) {
+  const handleResetCheckIn = (id: string, name: string, date: string) => {
+    if(window.confirm(`[RESET MASUK] Apakah Anda yakin ingin menghapus seluruh data presensi ${name} pada tanggal ${date}? Data Masuk dan Pulang akan hilang.`)) {
         DB.deleteAttendanceRecord(id);
+        refreshData();
+    }
+  };
+
+  const handleResetCheckOut = (id: string, name: string, date: string) => {
+    if(window.confirm(`[RESET PULANG] Apakah Anda yakin ingin mereset data kepulangan ${name} pada tanggal ${date}? User harus melakukan absen pulang ulang.`)) {
+        DB.removeCheckOutData(id);
         refreshData();
     }
   };
@@ -911,12 +919,11 @@ const AdminDashboard: React.FC = () => {
                           <th className="px-6 py-3">Foto Masuk</th>
                           <th className="px-6 py-3">Pulang</th>
                           <th className="px-6 py-3">Foto Pulang</th>
-                          <th className="px-6 py-3">Aksi</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 bg-white">
                         {attendance.length === 0 ? (
-                            <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">Belum ada data presensi</td></tr>
+                            <tr><td colSpan={7} className="px-6 py-8 text-center text-gray-400">Belum ada data presensi</td></tr>
                         ) : (
                             attendance.slice().reverse().map(record => (
                             <tr key={record.id} className="hover:bg-gray-50">
@@ -924,14 +931,23 @@ const AdminDashboard: React.FC = () => {
                                 <td className="px-6 py-4 font-medium text-gray-900">{record.userFullName}</td>
                                 <td className="px-6 py-4">{record.userUnit}</td>
                                 <td className="px-6 py-4">
-                                    <div className="flex flex-col items-start">
-                                        <span className="font-semibold text-green-600">{new Date(record.checkInTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                    <div className="flex flex-col items-start gap-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-semibold text-green-600">{new Date(record.checkInTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                            <button 
+                                                onClick={() => handleResetCheckIn(record.id, record.userFullName, record.date)}
+                                                className="text-red-400 hover:text-red-600 transition-colors"
+                                                title="Hapus Data Masuk (Reset Harian)"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                         {record.status === 'LATE' && (
-                                            <span className="mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-600">
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-600">
                                                 TERLAMBAT
                                             </span>
                                         )}
-                                        <span className="text-xs text-gray-400 flex items-center gap-1 max-w-[150px] truncate mt-1" title={record.checkInLocation}><MapPin size={10}/> {record.checkInLocation}</span>
+                                        <span className="text-xs text-gray-400 flex items-center gap-1 max-w-[150px] truncate" title={record.checkInLocation}><MapPin size={10}/> {record.checkInLocation}</span>
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
@@ -948,8 +964,17 @@ const AdminDashboard: React.FC = () => {
                                 </td>
                                 <td className="px-6 py-4">
                                     {record.checkOutTime ? (
-                                        <div className="flex flex-col">
-                                            <span className="font-semibold text-red-600">{new Date(record.checkOutTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                        <div className="flex flex-col gap-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-semibold text-red-600">{new Date(record.checkOutTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                <button 
+                                                    onClick={() => handleResetCheckOut(record.id, record.userFullName, record.date)}
+                                                    className="text-orange-400 hover:text-orange-600 transition-colors"
+                                                    title="Reset Data Pulang"
+                                                >
+                                                    <RotateCcw size={14} />
+                                                </button>
+                                            </div>
                                             <span className="text-xs text-gray-400 flex items-center gap-1 max-w-[150px] truncate" title={record.checkOutLocation}><MapPin size={10}/> {record.checkOutLocation}</span>
                                         </div>
                                     ) : (
@@ -969,15 +994,6 @@ const AdminDashboard: React.FC = () => {
                                             </div>
                                         </div>
                                     )}
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                    <button 
-                                        onClick={() => handleDeleteAttendance(record.id, record.userFullName, record.date)}
-                                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                        title="Hapus Data Presensi"
-                                    >
-                                        <Trash2 size={18} />
-                                    </button>
                                 </td>
                             </tr>
                             ))
