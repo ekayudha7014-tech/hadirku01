@@ -33,6 +33,12 @@ export const addUser = (user: User): void => {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 };
 
+export const deleteUser = (userId: string): void => {
+  let users = getUsers();
+  users = users.filter(u => u.id !== userId);
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+};
+
 export const changePassword = (userId: string, oldPass: string, newPass: string): boolean => {
   const users = getUsers();
   const index = users.findIndex(u => u.id === userId);
@@ -55,6 +61,16 @@ export const resetUserPassword = (userId: string, newPass: string): void => {
   }
 };
 
+export const updateUserProfilePhoto = (userId: string, photoBase64: string): void => {
+  const users = getUsers();
+  const index = users.findIndex(u => u.id === userId);
+  
+  if (index !== -1) {
+    users[index].profilePhoto = photoBase64;
+    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  }
+};
+
 export const getAttendanceRecords = (): AttendanceRecord[] => {
   const stored = localStorage.getItem(ATTENDANCE_KEY);
   return stored ? JSON.parse(stored) : [];
@@ -71,6 +87,12 @@ export const saveAttendance = (record: AttendanceRecord): void => {
     // Add new
     records.push(record);
   }
+  localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
+};
+
+export const deleteAttendanceRecord = (id: string): void => {
+  let records = getAttendanceRecords();
+  records = records.filter(r => r.id !== id);
   localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
 };
 

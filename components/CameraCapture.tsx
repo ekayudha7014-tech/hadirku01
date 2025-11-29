@@ -10,20 +10,37 @@ interface CameraCaptureProps {
 export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose, title }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  // Gunakan useRef untuk stream agar tidak memicu re-render saat stream diset
+  const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string>('');
 
+  // Callback stabil untuk menghentikan kamera
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  // Callback stabil untuk memulai kamera
   const startCamera = useCallback(async () => {
+    setError('');
     try {
+      // Pastikan stream sebelumnya mati jika ada
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { 
             facingMode: 'user',
-            // Meminta rasio aspek ideal 1:1 jika didukung, namun browser mungkin tetap mengirim 4:3
             aspectRatio: 1 
         }, 
         audio: false,
       });
-      setStream(mediaStream);
+      
+      streamRef.current = mediaStream;
+      
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
       }
@@ -33,16 +50,12 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose
     }
   }, []);
 
-  const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-    }
-  }, [stream]);
-
   useEffect(() => {
     startCamera();
-    return () => stopCamera();
+    // Cleanup saat komponen unmount
+    return () => {
+      stopCamera();
+    };
   }, [startCamera, stopCamera]);
 
   const takePhoto = () => {
@@ -50,25 +63,19 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose
       const video = videoRef.current;
       const canvas = canvasRef.current;
       
-      // Tentukan ukuran persegi berdasarkan sisi terpendek video
       const size = Math.min(video.videoWidth, video.videoHeight);
       
-      // Set ukuran canvas menjadi persegi
       canvas.width = size;
       canvas.height = size;
       
-      // Hitung posisi tengah untuk cropping (Center Crop)
       const startX = (video.videoWidth - size) / 2;
       const startY = (video.videoHeight - size) / 2;
       
       const context = canvas.getContext('2d');
       if (context) {
-        // Draw video frame to canvas dengan cropping
-        // drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
         context.drawImage(video, startX, startY, size, size, 0, 0, size, size);
-        
-        // Convert to Base64 string
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        
         stopCamera();
         onCapture(dataUrl);
       }
@@ -96,7 +103,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose
               ref={videoRef}
               autoPlay
               playsInline
-              className="w-full h-full object-cover transform scale-x-[-1]" // object-cover agar mengisi kotak persegi
+              className="w-full h-full object-cover transform scale-x-[-1]"
             />
           )}
           {/* Guide frame visual */}

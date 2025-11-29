@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { User, AttendanceRecord, Coordinates, LeaveRequest, SystemConfig } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { User, AttendanceRecord, Coordinates, LeaveRequest, SystemConfig, Role } from './types';
 import * as DB from './services/db';
 import { CameraCapture } from './components/CameraCapture';
+import { LocationPickerMap } from './components/LocationPickerMap';
 import { 
   LogOut, 
   UserPlus, 
@@ -24,7 +25,11 @@ import {
   Settings,
   LocateFixed,
   Maximize2,
-  RefreshCcw
+  RefreshCcw,
+  Trash2,
+  ShieldAlert,
+  Upload,
+  FileDown
 } from 'lucide-react';
 
 // --- UTILS ---
@@ -44,6 +49,61 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 
   const d = R * c; // dalam meter
   return d;
+};
+
+// Helper untuk mendapatkan jadwal pulang berdasarkan hari
+const getMinCheckoutTime = (date: Date): { hour: number, minute: number, label: string } => {
+    const day = date.getDay(); // 0 = Minggu, 1 = Senin, ...
+    
+    // Senin (1) - Kamis (4) : 14.00
+    if (day >= 1 && day <= 4) return { hour: 14, minute: 0, label: '14:00' };
+    
+    // Jumat (5) : 11.00
+    if (day === 5) return { hour: 11, minute: 0, label: '11:00' };
+    
+    // Sabtu (6) : 12.30
+    if (day === 6) return { hour: 12, minute: 30, label: '12:30' };
+    
+    // Minggu (0) : Bebas / Libur (Asumsi tidak dibatasi atau ikut aturan default)
+    return { hour: 0, minute: 0, label: 'Bebas' };
+};
+
+// Fungsi Reverse Geocoding untuk mendapatkan Nama Tempat
+const getPlaceName = async (lat: number, lng: number): Promise<string> => {
+  try {
+      // Menggunakan Nominatim OpenStreetMap (Free, No API Key required for small usage)
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
+          headers: {
+              'User-Agent': 'HadirkuApp/1.0'
+          }
+      });
+      
+      if (!response.ok) {
+          throw new Error('Network response was not ok');
+      }
+
+      const data = await response.json();
+      const addr = data.address || {};
+      const place = data.display_name || "";
+      
+      // Membentuk alamat yang rapi
+      // Prioritas: Nama Gedung/Tempat -> Jalan -> Kota
+      const street = addr.road || addr.pedestrian || addr.building || "";
+      const area = addr.village || addr.suburb || addr.city_district || addr.city || addr.town || "";
+      
+      if (street && area) {
+          return `${street}, ${area}`;
+      } else if (place) {
+          // Ambil 3 bagian pertama dari alamat panjang jika format di atas tidak ada
+          return place.split(',').slice(0, 3).join(',');
+      } else {
+           return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      }
+
+  } catch (error) {
+      console.error("Gagal mendapatkan nama tempat:", error);
+      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
 };
 
 // --- MAIN APP COMPONENT ---
@@ -301,8 +361,17 @@ const AdminDashboard: React.FC = () => {
 
   // Add User State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newUser, setNewUser] = useState({ fullName: '', username: '', password: '', unit: '' });
+  const [newUser, setNewUser] = useState<{
+    fullName: string;
+    username: string;
+    password: string;
+    unit: string;
+    role: Role;
+  }>({ fullName: '', username: '', password: '', unit: '', role: 'USER' });
   const [loadingConfig, setLoadingConfig] = useState(false);
+
+  // CSV Import State
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Reset User Password State
   const [resetPwdUser, setResetPwdUser] = useState<User | null>(null);
@@ -325,14 +394,95 @@ const AdminDashboard: React.FC = () => {
 
     const user: User = {
       id: `user-${Date.now()}`,
-      role: 'USER',
       ...newUser
     };
     
     DB.addUser(user);
-    setNewUser({ fullName: '', username: '', password: '', unit: '' });
+    setNewUser({ fullName: '', username: '', password: '', unit: '', role: 'USER' });
     setIsAddModalOpen(false);
     refreshData();
+  };
+
+  // Logic Import CSV User
+  const handleDownloadTemplate = () => {
+    const headers = "Nama Lengkap,Username,Password,Unit Kerja,Role";
+    const example = "Budi Santoso,budi01,rahasia123,IT Support,USER";
+    const csvContent = "data:text/csv;charset=utf-8," + headers + "\n" + example;
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "template_users.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (!text) return;
+
+        const lines = text.split('\n');
+        let successCount = 0;
+        let failCount = 0;
+        const currentUsers = DB.getUsers();
+
+        // Mulai dari index 1 untuk skip header
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            // Split by comma, tapi hati-hati dengan koma dalam quote (implementasi sederhana)
+            const parts = line.split(',');
+            if (parts.length >= 4) {
+                const fullName = parts[0]?.trim();
+                const username = parts[1]?.trim();
+                const password = parts[2]?.trim();
+                const unit = parts[3]?.trim();
+                let roleStr = parts[4]?.trim().toUpperCase();
+
+                // Validasi sederhana
+                if (!fullName || !username || !password || !unit) {
+                    failCount++;
+                    continue;
+                }
+
+                // Cek duplikat username
+                if (currentUsers.some(u => u.username === username)) {
+                    failCount++;
+                    continue;
+                }
+
+                // Validasi Role
+                let role: Role = 'USER';
+                if (roleStr === 'ADMIN') role = 'ADMIN';
+
+                const newUser: User = {
+                    id: `user-${Date.now()}-${i}`,
+                    fullName,
+                    username,
+                    password,
+                    unit,
+                    role
+                };
+
+                DB.addUser(newUser);
+                successCount++;
+            } else {
+                failCount++;
+            }
+        }
+
+        alert(`Impor Selesai.\nBerhasil: ${successCount}\nGagal (Duplikat/Format Salah): ${failCount}`);
+        refreshData();
+        // Reset input file
+        if (fileInputRef.current) fileInputRef.current.value = "";
+    };
+    reader.readAsText(file);
   };
 
   const handleAdminResetPassword = (e: React.FormEvent) => {
@@ -346,6 +496,20 @@ const AdminDashboard: React.FC = () => {
         alert(`Password untuk user ${resetPwdUser.fullName} berhasil direset.`);
         setResetPwdUser(null);
         setAdminNewPass('');
+        refreshData();
+    }
+  };
+
+  const handleDeleteUser = (id: string, name: string) => {
+    if (window.confirm(`Apakah Anda yakin ingin menghapus user "${name}"? Data yang dihapus tidak dapat dikembalikan.`)) {
+        DB.deleteUser(id);
+        refreshData();
+    }
+  };
+
+  const handleDeleteAttendance = (id: string, name: string, date: string) => {
+    if(window.confirm(`Apakah Anda yakin ingin menghapus data presensi ${name} pada tanggal ${date}? Data yang dihapus tidak dapat dikembalikan.`)) {
+        DB.deleteAttendanceRecord(id);
         refreshData();
     }
   };
@@ -572,14 +736,39 @@ const AdminDashboard: React.FC = () => {
         <div className="p-6">
           {activeTab === 'USERS' ? (
             <div>
-              <div className="flex justify-between items-center mb-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                 <h2 className="text-lg font-bold text-gray-800">Daftar Karyawan</h2>
-                <button 
-                  onClick={() => setIsAddModalOpen(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
-                >
-                  <UserPlus size={18} /> Tambah User
-                </button>
+                <div className="flex gap-2">
+                    <button 
+                      onClick={handleDownloadTemplate}
+                      className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
+                      title="Unduh Template CSV"
+                    >
+                      <FileDown size={18} /> <span className="hidden sm:inline">Template</span>
+                    </button>
+                    
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
+                      title="Impor User dari CSV"
+                    >
+                      <Upload size={18} /> <span className="hidden sm:inline">Impor CSV</span>
+                    </button>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        onChange={handleImportCSV} 
+                        accept=".csv" 
+                        hidden 
+                    />
+
+                    <button 
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
+                    >
+                      <UserPlus size={18} /> Tambah
+                    </button>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -601,16 +790,29 @@ const AdminDashboard: React.FC = () => {
                         <td className="px-6 py-4">
                             <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">{user.unit}</span>
                         </td>
-                        <td className="px-6 py-4 text-xs">{user.role}</td>
+                        <td className="px-6 py-4 text-xs">
+                             <span className={`px-2 py-1 rounded-full font-semibold ${user.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
+                                {user.role}
+                             </span>
+                        </td>
                         <td className="px-6 py-4 text-xs">
                             {user.role !== 'ADMIN' && (
-                                <button 
-                                    onClick={() => setResetPwdUser(user)}
-                                    className="p-1.5 bg-gray-100 text-gray-600 rounded hover:bg-orange-100 hover:text-orange-600 transition-colors"
-                                    title="Reset Password"
-                                >
-                                    <KeyRound size={16} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button 
+                                        onClick={() => setResetPwdUser(user)}
+                                        className="p-1.5 bg-gray-100 text-gray-600 rounded hover:bg-orange-100 hover:text-orange-600 transition-colors"
+                                        title="Reset Password"
+                                    >
+                                        <KeyRound size={16} />
+                                    </button>
+                                    <button 
+                                        onClick={() => handleDeleteUser(user.id, user.fullName)}
+                                        className="p-1.5 bg-gray-100 text-gray-600 rounded hover:bg-red-100 hover:text-red-600 transition-colors"
+                                        title="Hapus User"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
                             )}
                         </td>
                       </tr>
@@ -709,11 +911,12 @@ const AdminDashboard: React.FC = () => {
                           <th className="px-6 py-3">Foto Masuk</th>
                           <th className="px-6 py-3">Pulang</th>
                           <th className="px-6 py-3">Foto Pulang</th>
+                          <th className="px-6 py-3">Aksi</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 bg-white">
                         {attendance.length === 0 ? (
-                            <tr><td colSpan={7} className="px-6 py-8 text-center text-gray-400">Belum ada data presensi</td></tr>
+                            <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">Belum ada data presensi</td></tr>
                         ) : (
                             attendance.slice().reverse().map(record => (
                             <tr key={record.id} className="hover:bg-gray-50">
@@ -767,6 +970,15 @@ const AdminDashboard: React.FC = () => {
                                         </div>
                                     )}
                                 </td>
+                                <td className="px-6 py-4 text-center">
+                                    <button 
+                                        onClick={() => handleDeleteAttendance(record.id, record.userFullName, record.date)}
+                                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                        title="Hapus Data Presensi"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                </td>
                             </tr>
                             ))
                         )}
@@ -786,12 +998,12 @@ const AdminDashboard: React.FC = () => {
                     <h2 className="text-lg font-bold text-gray-800">Pengaturan Lokasi Sekolah</h2>
                 </div>
 
-                <div className="bg-white p-6 rounded-xl border border-blue-100 bg-blue-50/50">
+                <div className="bg-white p-6 rounded-xl border border-blue-100 bg-blue-50/50 mb-6">
                     <div className="flex flex-col md:flex-row gap-6 items-start">
                         <div className="flex-1">
-                            <h3 className="font-semibold text-gray-900 mb-2">Lokasi Sekolah / Kantor Saat Ini</h3>
+                            <h3 className="font-semibold text-gray-900 mb-2">Status Konfigurasi</h3>
                             <p className="text-sm text-gray-600 mb-4">
-                                Atur titik koordinat lokasi sekolah agar user hanya dapat melakukan presensi dalam radius {config.radiusMeters} meter dari titik ini.
+                                Tentukan lokasi pusat sekolah/kantor. User hanya dapat melakukan presensi dalam radius yang ditentukan.
                             </p>
                             
                             <div className="flex items-center gap-4 mb-4">
@@ -808,22 +1020,19 @@ const AdminDashboard: React.FC = () => {
                                     </span>
                                 </div>
                             </div>
-
-                            <button 
-                                onClick={handleSetCurrentLocation}
-                                disabled={loadingConfig}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-70"
-                            >
-                                <LocateFixed size={18} />
-                                {loadingConfig ? 'Mendapatkan Lokasi...' : 'Set Lokasi Sekolah Saat Ini'}
-                            </button>
-                            <p className="text-xs text-gray-500 mt-2">
-                                *Pastikan Anda berada di lokasi sekolah saat menekan tombol ini.
-                            </p>
+                            
+                            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                                <span className="text-xs text-gray-400 block">Nama Lokasi</span>
+                                <span className="font-medium text-gray-800">
+                                    {config.officeName || '-'}
+                                </span>
+                            </div>
                         </div>
+
                         <div className="hidden md:block w-px bg-blue-200 self-stretch"></div>
+                        
                         <div className="flex-1">
-                            <h3 className="font-semibold text-gray-900 mb-2">Status Radius</h3>
+                            <h3 className="font-semibold text-gray-900 mb-2">Radius Presensi</h3>
                             <div className="flex items-center gap-3">
                                 <div className="h-24 w-24 rounded-full border-4 border-blue-200 bg-blue-100 flex items-center justify-center flex-col">
                                     <span className="text-xl font-bold text-blue-700">{config.radiusMeters}m</span>
@@ -835,6 +1044,38 @@ const AdminDashboard: React.FC = () => {
                             </div>
                         </div>
                     </div>
+                </div>
+
+                {/* Map Picker Component */}
+                <div className="bg-white p-1 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <LocationPickerMap 
+                        initialLat={config.officeLocation?.latitude}
+                        initialLng={config.officeLocation?.longitude}
+                        onLocationSelect={async (lat, lng) => {
+                             // Reverse Geocode untuk nama lokasi
+                             const name = await getPlaceName(lat, lng); // Using the global function
+                             
+                             const newConfig: SystemConfig = {
+                                ...config,
+                                officeLocation: { latitude: lat, longitude: lng },
+                                officeName: name
+                             };
+                             DB.saveSystemConfig(newConfig);
+                             setConfig(newConfig);
+                        }}
+                    />
+                </div>
+                
+                {/* Fallback Button if needed */}
+                <div className="flex justify-end">
+                    <button 
+                        onClick={handleSetCurrentLocation}
+                        disabled={loadingConfig}
+                        className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-70 text-sm"
+                    >
+                        <LocateFixed size={16} />
+                        {loadingConfig ? 'Mendapatkan...' : 'Gunakan GPS Perangkat Saya'}
+                    </button>
                 </div>
             </div>
           )}
@@ -857,11 +1098,26 @@ const AdminDashboard: React.FC = () => {
                 <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   value={newUser.fullName} onChange={e => setNewUser({...newUser, fullName: e.target.value})} />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Unit Kerja</label>
-                <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  value={newUser.unit} onChange={e => setNewUser({...newUser, unit: e.target.value})} />
+              
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Unit Kerja</label>
+                    <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      value={newUser.unit} onChange={e => setNewUser({...newUser, unit: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Role / Peran</label>
+                    <select
+                        className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                        value={newUser.role}
+                        onChange={e => setNewUser({...newUser, role: e.target.value as Role})}
+                    >
+                        <option value="USER">User (Karyawan)</option>
+                        <option value="ADMIN">Administrator</option>
+                    </select>
+                  </div>
               </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
@@ -969,8 +1225,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
   const [leaveDate, setLeaveDate] = useState(new Date().toISOString().split('T')[0]);
   const [myLeaves, setMyLeaves] = useState<LeaveRequest[]>([]);
   
+  // Profile Photo State
+  const [showPhotoUpload, setShowPhotoUpload] = useState(false);
+  
   // Config
   const [sysConfig, setSysConfig] = useState<SystemConfig>({ radiusMeters: 500 });
+  const [checkoutRule, setCheckoutRule] = useState("");
 
   useEffect(() => {
     // Refresh record
@@ -983,8 +1243,16 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
     // Fetch Config
     setSysConfig(DB.getSystemConfig());
 
-    // Live Clock
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    // Live Clock & Rule
+    const updateTimeAndRule = () => {
+        const now = new Date();
+        setCurrentTime(now);
+        const rule = getMinCheckoutTime(now);
+        setCheckoutRule(rule.label);
+    };
+
+    updateTimeAndRule();
+    const timer = setInterval(updateTimeAndRule, 1000);
     return () => clearInterval(timer);
   }, [user.id, isLeaveModalOpen]); // Refresh when modal closes
 
@@ -1009,54 +1277,27 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
     });
   };
 
-  // Fungsi Reverse Geocoding untuk mendapatkan Nama Tempat
-  const getPlaceName = async (lat: number, lng: number): Promise<string> => {
-    try {
-        // Menggunakan Nominatim OpenStreetMap (Free, No API Key required for small usage)
-        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
-            headers: {
-                'User-Agent': 'HadirkuApp/1.0'
-            }
-        });
-        
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-
-        const data = await response.json();
-        const addr = data.address || {};
-        const place = data.display_name || "";
-        
-        // Membentuk alamat yang rapi
-        // Prioritas: Nama Gedung/Tempat -> Jalan -> Kota
-        const street = addr.road || addr.pedestrian || addr.building || "";
-        const area = addr.village || addr.suburb || addr.city_district || addr.city || addr.town || "";
-        
-        if (street && area) {
-            return `${street}, ${area}`;
-        } else if (place) {
-            // Ambil 3 bagian pertama dari alamat panjang jika format di atas tidak ada
-            return place.split(',').slice(0, 3).join(',');
-        } else {
-             return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-        }
-
-    } catch (error) {
-        console.error("Gagal mendapatkan nama tempat:", error);
-        return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    }
-  };
-
   const handleCapture = async (photoBase64: string) => {
     setLoadingLoc(true);
     setLoadingText("Mendapatkan Lokasi GPS...");
     try {
-      // 0. Time Validation Logic (New)
       const now = new Date();
-      const currentHour = now.getHours();
-      const currentMinute = now.getMinutes();
+      
+      // 0. Time Validation Logic (Check Out Restrictions)
+      if (cameraMode === 'OUT') {
+          const rule = getMinCheckoutTime(now);
+          const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+          const ruleTotalMinutes = rule.hour * 60 + rule.minute;
 
-      // Check Out Logic REMOVED based on user request (Allow checkout > 16:00)
+          if (currentTotalMinutes < ruleTotalMinutes) {
+               // Jangan proses jika belum waktunya
+               const timeString = `${rule.hour.toString().padStart(2, '0')}:${rule.minute.toString().padStart(2, '0')}`;
+               alert(`Gagal! Belum waktunya pulang.\n\nJadwal pulang hari ini dimulai pukul ${timeString} WIB.`);
+               setIsCameraOpen(false);
+               setLoadingLoc(false);
+               return;
+          }
+      }
 
       // 1. Get Coordinates
       const coords = await getGeolocation();
@@ -1075,6 +1316,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
         if (distance > sysConfig.radiusMeters) {
              alert(`Gagal! Anda berada diluar jangkauan presensi.\n\nJarak Anda: ${distance.toFixed(0)}m\nBatas Maksimal: ${sysConfig.radiusMeters}m\n\nSilakan mendekat ke lokasi sekolah/kantor.`);
              setIsCameraOpen(false);
+             setLoadingLoc(false);
              return; // Stop process
         }
       }
@@ -1087,6 +1329,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
       const today = nowISO.split('T')[0];
 
       if (cameraMode === 'IN') {
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        
         // Check Late Status Logic: Late if > 07:00
         let attendanceStatus: 'ON_TIME' | 'LATE' = 'ON_TIME';
         if (currentHour > 7 || (currentHour === 7 && currentMinute > 0)) {
@@ -1162,17 +1407,64 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
     setIsCameraOpen(true);
   };
 
+  const handleProfilePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        
+        reader.onloadend = () => {
+            const base64String = reader.result as string;
+            // Update local state and DB
+            const updatedUser = { ...user, profilePhoto: base64String };
+            DB.updateUserProfilePhoto(user.id, base64String);
+            // Force reload or callback to update App state (here we just reload page or rely on parent update if passed)
+            // Since we receive 'user' as prop, ideally we should call a parent function. 
+            // For now, let's alert and reload to simplify.
+            alert("Foto profil berhasil diperbarui! Silakan login ulang atau refresh halaman untuk melihat perubahan.");
+            window.location.reload(); 
+        };
+        
+        reader.readAsDataURL(file);
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto space-y-8 pb-10">
       {/* Header Profile */}
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-8 text-white shadow-lg relative overflow-hidden">
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-8 text-white shadow-lg relative overflow-hidden group">
         <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-white opacity-10 rounded-full"></div>
         <div className="absolute bottom-0 left-0 -mb-4 -ml-4 w-32 h-32 bg-white opacity-10 rounded-full"></div>
         
         <div className="relative z-10 flex items-center gap-6">
-            <div className="h-20 w-20 bg-white text-blue-600 rounded-full flex items-center justify-center font-bold text-3xl shadow-inner">
-                {user.fullName.charAt(0)}
+            <div className="relative">
+                {user.profilePhoto ? (
+                    <img 
+                        src={user.profilePhoto} 
+                        alt="Profile" 
+                        className="h-24 w-24 rounded-full object-cover border-4 border-white shadow-md bg-white"
+                    />
+                ) : (
+                    <div className="h-24 w-24 bg-white text-blue-600 rounded-full flex items-center justify-center font-bold text-3xl shadow-inner border-4 border-white/20">
+                        {user.fullName.charAt(0)}
+                    </div>
+                )}
+                
+                <label 
+                    htmlFor="profile-upload"
+                    className="absolute bottom-0 right-0 bg-white text-blue-600 p-2 rounded-full shadow-lg cursor-pointer hover:bg-gray-100 transition-colors"
+                    title="Ubah Foto Profil"
+                >
+                    <Camera size={16} />
+                    <input 
+                        id="profile-upload" 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange={handleProfilePhotoUpload}
+                    />
+                </label>
             </div>
+            
             <div>
                 <h2 className="text-2xl font-bold mb-1">{user.fullName}</h2>
                 <div className="flex items-center gap-2 text-blue-100 bg-blue-700/30 px-3 py-1 rounded-full w-fit">
@@ -1194,7 +1486,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ user }) => {
         {/* Helper info jam */}
         <div className="mt-2 text-xs text-gray-400 flex justify-center gap-4">
             <span className="flex items-center gap-1"><Clock size={12}/> Masuk: &lt; 07:00</span>
-            <span className="flex items-center gap-1"><Clock size={12}/> Pulang: &ge; 16:00</span>
+            <span className="flex items-center gap-1"><Clock size={12}/> Pulang: &ge; {checkoutRule}</span>
         </div>
       </div>
 

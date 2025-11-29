@@ -7,6 +7,7 @@ export interface User {
   fullName: string;
   unit: string;
   role: Role;
+  profilePhoto?: string;
 }
 
 export interface AttendanceRecord {
